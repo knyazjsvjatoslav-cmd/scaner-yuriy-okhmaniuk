@@ -22,59 +22,61 @@ def calculate_vwap(df):
     typical_price = (df['high'] + df['low'] + df['close']) / 3
     return (typical_price * df['volume']).sum() / df['volume'].sum()
 
-async def fetch_pair_data(exchange, symbol):
-    """Завантаження свічок та обчислення метрик перегріву"""
-    try:
-        ohlcv = await exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=60)
-        if len(ohlcv) < 50:
-            return None
+async def fetch_pair_data(exchange, symbol, semaphore):
+    """Завантаження свічок та обчислення метрик перегріву з обмеженням швидкості"""
+    async with semaphore:
+        try:
+            await asyncio.sleep(0.05)  # Невелика пауза, щоб не перевищувати ліміти Bybit
+            ohlcv = await exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=60)
+            if len(ohlcv) < 50:
+                return None
 
-        df = pd.DataFrame(ohlcv, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
-        
-        # Обчислення індикаторів через бібліотеку ta
-        df['RSI'] = ta.momentum.rsi(df['close'], window=14)
-        df['SMA_VOL'] = ta.trend.sma_indicator(df['volume'], window=20)
-        vwap_val = calculate_vwap(df.tail(20))
-        
-        last = df.iloc[-1]
-        candle_range = last['high'] - last['low']
-        
-        if candle_range == 0 or pd.isna(last['RSI']):
-            return None
+            df = pd.DataFrame(ohlcv, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
             
-        upper_shadow = last['high'] - max(last['open'], last['close'])
-        shadow_ratio = upper_shadow / candle_range
-        
-        is_rsi_high = last['RSI'] > RSI_THRESHOLD
-        is_vol_high = last['volume'] > (last['SMA_VOL'] * VOL_MULTIPLIER)
-        
-        if is_rsi_high or is_vol_high:
-            if is_rsi_high and is_vol_high and shadow_ratio >= MIN_UPPER_SHADOW:
-                verdict = "🔴 SHORT-СЕТАП"
-            elif is_rsi_high and is_vol_high:
-                verdict = "⚠️ ФОРМУЄТЬСЯ"
-            else:
-                verdict = "👀 НАБЛЮДАТИ"
+            df['RSI'] = ta.momentum.rsi(df['close'], window=14)
+            df['SMA_VOL'] = ta.trend.sma_indicator(df['volume'], window=20)
+            vwap_val = calculate_vwap(df.tail(20))
+            
+            last = df.iloc[-1]
+            candle_range = last['high'] - last['low']
+            
+            if candle_range == 0 or pd.isna(last['RSI']):
+                return None
                 
-            vol_ratio = last['volume'] / last['SMA_VOL'] if last['SMA_VOL'] > 0 else 0
-            vwap_diff = ((last['close'] - vwap_val) / vwap_val) * 100
+            upper_shadow = last['high'] - max(last['open'], last['close'])
+            shadow_ratio = upper_shadow / candle_range
             
-            return {
-                "Токен": symbol.split(':')[0].replace('/USDT', ''),
-                "Ціна ($)": round(last['close'], 5),
-                "RSI (4H)": round(last['RSI'], 1),
-                "Об'єм (х)": round(vol_ratio, 1),
-                "Тінь (%)": round(shadow_ratio * 100, 1),
-                "Відхилення VWAP (%)": f"{vwap_diff:+.1f}%",
-                "Вердикт": verdict
-            }
-    except Exception:
+            is_rsi_high = last['RSI'] > RSI_THRESHOLD
+            is_vol_high = last['volume'] > (last['SMA_VOL'] * VOL_MULTIPLIER)
+            
+            if is_rsi_high or is_vol_high:
+                if is_rsi_high and is_vol_high and shadow_ratio >= MIN_UPPER_SHADOW:
+                    verdict = "🔴 SHORT-СЕТАП"
+                elif is_rsi_high and is_vol_high:
+                    verdict = "⚠️ ФОРМУЄТЬСЯ"
+                else:
+                    verdict = "👀 НАБЛЮДАТИ"
+                    
+                vol_ratio = last['volume'] / last['SMA_VOL'] if last['SMA_VOL'] > 0 else 0
+                vwap_diff = ((last['close'] - vwap_val) / vwap_val) * 100
+                
+                return {
+                    "Токен": symbol.split(':')[0].replace('/USDT', ''),
+                    "Ціна ($)": round(last['close'], 5),
+                    "RSI (4H)": round(last['RSI'], 1),
+                    "Об'єм (х)": round(vol_ratio, 1),
+                    "Тінь (%)": round(shadow_ratio * 100, 1),
+                    "Відхилення VWAP (%)": f"{vwap_diff:+.1f}%",
+                    "Вердикт": verdict
+                }
+        except Exception:
+            return None
         return None
-    return None
 
 async def scan_bybit_market():
     """Сканування всіх USDT-пар на Bybit"""
     exchange = ccxt.bybit({'enableRateLimit': True})
+    semaphore = asyncio.Semaphore(5)  # Максимум 5 одночасних запитів до Bybit
     results = []
     
     try:
@@ -84,7 +86,7 @@ async def scan_bybit_market():
             if symbol.endswith(':USDT') and (data.get('quoteVolume') or 0) > MIN_24H_VOL_USD
         ]
         
-        tasks = [fetch_pair_data(exchange, symbol) for symbol in usdt_pairs]
+        tasks = [fetch_pair_data(exchange, symbol, semaphore) for symbol in usdt_pairs]
         data_list = await asyncio.gather(*tasks)
         
         results = [item for item in data_list if item is not None]
