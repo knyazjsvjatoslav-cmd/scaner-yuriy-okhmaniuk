@@ -2,7 +2,7 @@ import asyncio
 import time
 import ccxt.async_support as ccxt
 import pandas as pd
-import pandas_ta as ta
+import ta
 import streamlit as st
 
 # ==========================================
@@ -31,9 +31,9 @@ async def fetch_pair_data(exchange, symbol):
 
         df = pd.DataFrame(ohlcv, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
         
-        # Обчислення індикаторів
-        df['RSI'] = ta.rsi(df['close'], length=14)
-        df['SMA_VOL'] = ta.sma(df['volume'], length=20)
+        # Обчислення індикаторів через бібліотеку ta
+        df['RSI'] = ta.momentum.rsi(df['close'], window=14)
+        df['SMA_VOL'] = ta.trend.sma_indicator(df['volume'], window=20)
         vwap_val = calculate_vwap(df.tail(20))
         
         last = df.iloc[-1]
