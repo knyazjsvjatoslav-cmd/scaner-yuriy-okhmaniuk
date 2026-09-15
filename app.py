@@ -6,7 +6,7 @@ import ta
 import streamlit as st
 
 # ==========================================
-# ⚙️ ОСНОВНІ НАЛАШТУВАННЯ СКАНЕРА (BYBIT)
+# ⚙️ ОСНОВНІ НАЛАШТУВАННЯ СКАНЕРА (BINANCE)
 # ==========================================
 TIMEFRAME = '4h'
 RSI_THRESHOLD = 75         # Поріг RSI для перегріву
@@ -22,11 +22,11 @@ def calculate_vwap(df):
     return (typical_price * df['volume']).sum() / df['volume'].sum()
 
 async def fetch_pair_data(exchange, symbol, semaphore):
-    """Завантаження свічок з Bybit з обробкою лімітів"""
+    """Завантаження свічок з Binance з обробкою лімітів"""
     async with semaphore:
         for attempt in range(3):
             try:
-                await asyncio.sleep(0.12)  # Пауза між запитами для захисту від блокувань
+                await asyncio.sleep(0.05)  # Затримка між запитами
                 ohlcv = await exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=60)
                 if len(ohlcv) < 50:
                     return None
@@ -60,7 +60,7 @@ async def fetch_pair_data(exchange, symbol, semaphore):
                     vol_ratio = last['volume'] / last['SMA_VOL'] if last['SMA_VOL'] > 0 else 0
                     vwap_diff = ((last['close'] - vwap_val) / vwap_val) * 100
                     
-                    clean_ticker = symbol.split(':')[0].replace('/USDT', '')
+                    clean_ticker = symbol.split('/')[0].split(':')[0]
                     
                     return {
                         "Токен": clean_ticker,
@@ -73,15 +73,15 @@ async def fetch_pair_data(exchange, symbol, semaphore):
                     }
                 break
             except ccxt.RateLimitExceeded:
-                await asyncio.sleep(2 * (attempt + 1))  # Автоматичне очікування при перевищенні ліміту
+                await asyncio.sleep(1.5 * (attempt + 1))
             except Exception:
                 return None
         return None
 
-async def scan_bybit_market():
-    """Сканування активних USDT-перпечуалів на Bybit"""
-    exchange = ccxt.bybit({'enableRateLimit': True})
-    semaphore = asyncio.Semaphore(3)  # М'який ліміт: 3 паралельних запити
+async def scan_binance_market():
+    """Сканування всіх USDT-ф'ючерсів на Binance"""
+    exchange = ccxt.binanceusdm({'enableRateLimit': True})
+    semaphore = asyncio.Semaphore(10)  # Binance легко витримує 10 паралельних запитів
     results = []
     
     try:
@@ -91,8 +91,7 @@ async def scan_bybit_market():
             if market.get('linear') and market.get('settle') == 'USDT' and market.get('active')
         ]
         
-        # Аналізуємо топи пар (100 найактивніших монет)
-        tasks = [fetch_pair_data(exchange, symbol, semaphore) for symbol in usdt_pairs[:100]]
+        tasks = [fetch_pair_data(exchange, symbol, semaphore) for symbol in usdt_pairs]
         data_list = await asyncio.gather(*tasks)
         
         results = [item for item in data_list if item is not None]
@@ -104,14 +103,14 @@ async def scan_bybit_market():
 # ==========================================
 # 🖥 ІНТЕРФЕЙС STREAMLIT
 # ==========================================
-st.set_page_config(page_title="Bybit Overheat Scanner", page_icon="🔥", layout="wide")
+st.set_page_config(page_title="Binance Overheat Scanner", page_icon="🔥", layout="wide")
 
-st.title("🔥 Сканер Перегрітих Криптоактивів (Bybit 4H)")
+st.title("🔥 Сканер Перегрітих Криптоактивів (Binance Futures 4H)")
 st.caption("Автоматичний аналіз RSI, сплесків об'єму, відхилення від VWAP та свічних паттернів.")
 
 if st.button("🔄 Оновити дані зараз") or 'results' not in st.session_state:
-    with st.spinner("Сканування ринку Bybit... Зачекайте близько 10-15 секунд"):
-        st.session_state['results'] = asyncio.run(scan_bybit_market())
+    with st.spinner("Сканування ринку Binance Futures... Зачекайте близько 5-10 секунд"):
+        st.session_state['results'] = asyncio.run(scan_binance_market())
         st.session_state['last_update'] = time.strftime("%H:%M:%S")
 
 results = st.session_state.get('results', [])
@@ -141,4 +140,4 @@ if results:
     
     st.dataframe(styled_df, use_container_width=True, height=450)
 else:
-    st.info("На даний момент перегрітих пар на ринку Bybit не виявлено або ринок перебуває у флеті.")
+    st.info("На даний момент перегрітих пар на ринку Binance не виявлено.")
