@@ -11,12 +11,12 @@ TIMEFRAME = '4h'
 
 # Пороги Перегріву (SHORT)
 RSI_OVERBOUGHT = 70
-RSI_WARMING = 60         # Зона підготовки до перегріву
+RSI_WARMING = 60
 MIN_UPPER_SHADOW = 0.30
 
 # Пороги Переохолодження (LONG)
 RSI_OVERSOLD = 32
-RSI_COOLING = 40         # Зона підготовки до переохолодження
+RSI_COOLING = 40
 MIN_LOWER_SHADOW = 0.30
 
 # Загальні
@@ -83,22 +83,28 @@ def scan_mexc_market():
                 vwap_diff = ((last['close'] - vwap_val) / vwap_val) * 100
                 rsi_val = round(last['RSI'], 1)
                 
-                # --- АНАЛІЗ ПЕРЕГРІВУ ТА ГАРЯЧИХ МОНЕТ ---
+                # --- ГРАДАЦІЯ ВАЖЛИВОСТІ: ПЕРЕГРІВ (SHORT) ---
                 if rsi_val >= RSI_WARMING:
                     if rsi_val >= RSI_OVERBOUGHT:
                         if vol_ratio >= VOL_MULTIPLIER_STRONG and upper_ratio >= MIN_UPPER_SHADOW:
                             verdict = "🔴 SHORT-СЕТАП"
+                            prio = 1  # Топ-1 важливість
                         elif vol_ratio >= VOL_MULTIPLIER_STRONG:
                             verdict = "⚠️ СТИСНЕННЯ / СПЛЕСК"
+                            prio = 2  # Топ-2 важливість
                         else:
                             verdict = "🔥 ПЕРЕГРІВ (RSI ≥ 70)"
-                    else:  # RSI 60–69
+                            prio = 4  # Топ-4 важливість
+                    else:
                         if vol_ratio >= VOL_MULTIPLIER_EARLY:
                             verdict = "⚡ ПОТЕНЦІЙНИЙ ПЕРЕГРІВ"
+                            prio = 3  # Топ-3 важливість
                         else:
                             verdict = "📈 РОЗГРІВ (RSI 60+)"
+                            prio = 5  # Топ-5 важливість
                             
                     overheated.append({
+                        "Prio": prio,
                         "Токен": clean_ticker,
                         "Ціна ($)": round(last['close'], 5),
                         "RSI (4H)": rsi_val,
@@ -108,22 +114,28 @@ def scan_mexc_market():
                         "Вердикт": verdict
                     })
 
-                # --- АНАЛІЗ ПЕРЕОХОЛОДЖЕННЯ ТА ХОЛОДНИХ МОНЕТ ---
+                # --- ГРАДАЦІЯ ВАЖЛИВОСТІ: ПЕРЕОХОЛОДЖЕННЯ (LONG) ---
                 if rsi_val <= RSI_COOLING:
                     if rsi_val <= RSI_OVERSOLD:
                         if vol_ratio >= VOL_MULTIPLIER_STRONG and lower_ratio >= MIN_LOWER_SHADOW:
                             verdict = "🟢 LONG-СЕТАП"
+                            prio = 1  # Топ-1 важливість
                         elif vol_ratio >= VOL_MULTIPLIER_STRONG:
                             verdict = "⚠️ КАПІТУЛЯЦІЯ / СПЛЕСК"
+                            prio = 2  # Топ-2 важливість
                         else:
                             verdict = "❄️ ПЕРЕОХОЛОДЖЕННЯ (RSI ≤ 32)"
-                    else:  # RSI 33–40
+                            prio = 4  # Топ-4 важливість
+                    else:
                         if vol_ratio >= VOL_MULTIPLIER_EARLY:
                             verdict = "⚡ ПОТЕНЦІЙНЕ ПЕРЕОХОЛОДЖЕННЯ"
+                            prio = 3  # Топ-3 важливість
                         else:
                             verdict = "📉 ОХОЛОДЖЕННЯ (RSI 40-)"
+                            prio = 5  # Топ-5 важливість
                             
                     oversold.append({
+                        "Prio": prio,
                         "Токен": clean_ticker,
                         "Ціна ($)": round(last['close'], 5),
                         "RSI (4H)": rsi_val,
@@ -151,10 +163,10 @@ def scan_mexc_market():
 st.set_page_config(page_title="MEXC Full Market Scanner", page_icon="⚡", layout="wide")
 
 st.title("⚡ Повний Сканер Ринку MEXC Futures")
-st.caption("Пошук готових сетапів та монет на стадії розігріву / охолодження.")
+st.caption("Строге сортування за важливістю сигналів (від готових сетапів до підготовки).")
 
 if st.button("🔄 Оновити дані зараз") or 'overheated' not in st.session_state:
-    with st.spinner("Сканування ВСІХ монет MEXC..."):
+    with st.spinner("Сканування ринку MEXC..."):
         overheated, oversold = scan_mexc_market()
         st.session_state['overheated'] = overheated
         st.session_state['oversold'] = oversold
@@ -164,40 +176,44 @@ overheated = st.session_state.get('overheated', [])
 oversold = st.session_state.get('oversold', [])
 last_update = st.session_state.get('last_update', 'Ніколи')
 
-st.write(f"**Останнє оновлення:** `{last_update}` | Гарячі/Перегріті: `{len(overheated)}` | Холодні/Переохолоджені: `{len(oversold)}`")
+st.write(f"**Останнє оновлення:** `{last_update}` | Гарячі: `{len(overheated)}` | Холодні: `{len(oversold)}`")
 
 tab1, tab2 = st.tabs(["🔥 Гарячі / Перегріті", "❄️ Холодні / Переохолоджені"])
 
 with tab1:
     if overheated:
-        df_over = pd.DataFrame(overheated).sort_values(by="RSI (4H)", ascending=False)
+        # Сортування: спочатку Важливість (1 -> 5), потім RSI спаданням
+        df_over = pd.DataFrame(overheated).sort_values(by=["Prio", "RSI (4H)"], ascending=[True, False])
+        df_over = df_over.drop(columns=["Prio"])
         
         def highlight_short(val):
             if val == "🔴 SHORT-СЕТАП":
                 return 'background-color: #ff4d4d; color: white; font-weight: bold;'
             elif "СПЛЕСК" in val:
-                return 'background-color: #ffa64d; color: black;'
+                return 'background-color: #ffa64d; color: black; font-weight: bold;'
             elif "ПОТЕНЦІЙНИЙ" in val:
-                return 'background-color: #ffe0b2; color: black; font-weight: bold;'
+                return 'background-color: #ffe0b2; color: black;'
             return 'background-color: #fff3e0; color: black;'
 
         st.dataframe(df_over.style.map(highlight_short, subset=["Вердикт"]), use_container_width=True, height=500)
     else:
-        st.info("Гарячих монет з RSI ≥ 60 зараз не знайдено.")
+        st.info("Гарячих монет зараз не знайдено.")
 
 with tab2:
     if oversold:
-        df_under = pd.DataFrame(oversold).sort_values(by="RSI (4H)", ascending=True)
+        # Сортування: спочатку Важливість (1 -> 5), потім RSI зростанням
+        df_under = pd.DataFrame(oversold).sort_values(by=["Prio", "RSI (4H)"], ascending=[True, True])
+        df_under = df_under.drop(columns=["Prio"])
         
         def highlight_long(val):
             if val == "🟢 LONG-СЕТАП":
                 return 'background-color: #2ecc71; color: white; font-weight: bold;'
             elif "СПЛЕСК" in val:
-                return 'background-color: #3498db; color: white;'
+                return 'background-color: #3498db; color: white; font-weight: bold;'
             elif "ПОТЕНЦІЙНЕ" in val:
-                return 'background-color: #b3e5fc; color: black; font-weight: bold;'
+                return 'background-color: #b3e5fc; color: black;'
             return 'background-color: #e1f5fe; color: black;'
 
         st.dataframe(df_under.style.map(highlight_long, subset=["Вердикт"]), use_container_width=True, height=500)
     else:
-        st.info("Холодних монет з RSI ≤ 40 зараз не знайдено.")
+        st.info("Холодних монет зараз не знайдено.")
